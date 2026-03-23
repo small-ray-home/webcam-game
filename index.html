@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 人臉隨機抽人系統</title>
+    <!-- 引入 Face-API.js 與 Tailwind CSS -->
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            background-color: #0f172a;
+            color: white;
+            overflow: hidden;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        video {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* 鏡像顯示 */
+        }
+        canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            pointer-events: none;
+        }
+        .controls {
+            position: absolute;
+            bottom: 2rem;
+            z-index: 50;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+        }
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 0.75rem 1.5rem;
+            border-radius: 9999px;
+        }
+        #loading-screen {
+            position: fixed;
+            inset: 0;
+            background: #0f172a;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 載入中畫面 -->
+    <div id="loading-screen">
+        <div class="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p class="text-lg font-medium">正在啟動 AI 視覺模型...</p>
+    </div>
+
+    <div id="container">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
+
+        <div class="controls">
+            <div id="status" class="glass-panel text-sm font-semibold tracking-wide">
+                等待鏡頭開啟...
+            </div>
+            
+            <button id="draw-btn" class="px-10 py-4 bg-red-600 hover:bg-red-500 disabled:bg-gray-600 text-white rounded-full text-xl font-bold shadow-2xl transition-all active:scale-95 disabled:cursor-not-allowed">
+                按下開始抽人
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('overlay');
+        const drawBtn = document.getElementById('draw-btn');
+        const statusText = document.getElementById('status');
+        const loadingScreen = document.getElementById('loading-screen');
+
+        let currentDetections = [];
+        let selectedIndex = -1;
+        let isDrawing = false;
+
+        // 載入模型 (使用外部 CDN 模型資源)
+        async function init() {
+            try {
+                const MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
+                await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+                video.srcObject = stream;
+                
+                video.onloadedmetadata = () => {
+                    loadingScreen.style.display = 'none';
+                    startDetectionLoop();
+                };
+            } catch (err) {
+                console.error(err);
+                alert("無法存取鏡頭或模型載入失敗，請確認是否允許鏡頭權限。");
+            }
+        }
+
+        function startDetectionLoop() {
+            const displaySize = { width: video.offsetWidth, height: video.offsetHeight };
+            faceapi.matchDimensions(canvas, displaySize);
+
+            setInterval(async () => {
+                // 偵測所有臉孔
+                const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions());
+                currentDetections = faceapi.resizeResults(detections, displaySize);
+                
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                if (!isDrawing) {
+                    statusText.innerText = `畫面中偵測到 ${currentDetections.length} 人`;
+                }
+
+                // 繪製結果
+                currentDetections.forEach((det, i) => {
+                    const box = det.box;
+                    const isWinner = i === selectedIndex;
+                    
+                    // 設定畫框顏色
+                    ctx.strokeStyle = isWinner ? '#ef4444' : '#3b82f6';
+                    ctx.lineWidth = isWinner ? 8 : 2;
+                    
+                    // 畫矩形
+                    ctx.strokeRect(box.x, box.y, box.width, box.height);
+
+                    // 如果是中獎者，增加文字提示
+                    if (isWinner) {
+                        ctx.fillStyle = '#ef4444';
+                        ctx.font = 'bold 30px sans-serif';
+                        ctx.fillText('就是你！', box.x, box.y - 15);
+                    }
+                });
+            }, 100);
+        }
+
+        // 抽籤按鈕事件
+        drawBtn.addEventListener('click', () => {
+            if (currentDetections.length === 0) {
+                statusText.innerText = "找不到人臉，請正對鏡頭！";
+                return;
+            }
+
+            isDrawing = true;
+            drawBtn.disabled = true;
+            statusText.innerText = "正在隨機選取中...";
+            
+            let count = 0;
+            const maxCounts = 20; // 隨機跳動次數
+            
+            const timer = setInterval(() => {
+                selectedIndex = Math.floor(Math.random() * currentDetections.length);
+                count++;
+                
+                if (count >= maxCounts) {
+                    clearInterval(timer);
+                    isDrawing = false;
+                    drawBtn.disabled = false;
+                    statusText.innerText = "🎉 抽中這位幸運兒！";
+                    
+                    // 5秒後取消中獎標記
+                    setTimeout(() => {
+                        if (!isDrawing) selectedIndex = -1;
+                    }, 5000);
+                }
+            }, 80);
+        });
+
+        // 啟動
+        init();
+    </script>
+</body>
+</html>
